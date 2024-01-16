@@ -131,13 +131,12 @@ load_succesful:
     lea     si, msg_success
     call    prtstr
 
-    ; Setup data and code segment for kernel
-    ; mov     ax, 0x800
-    ; mov     ds, ax
-    ; mov     cs, ax
+    ; Setup data and segment for kernel
+    mov     ax, 0x800
+    mov     ds, ax
 
     ; Pass control to loaded program
-    jmp     0800h:0000h  
+    jmp     0x0800:0x0000
 ;
 ;--------------------------------------------------------------------------------------------------
 

@@ -15,8 +15,8 @@
 ;==================================
 
 
-org 0x8000     ; Set location counter. BIOS loads boot sector to address 7C00h
-bits 16        ; Generate 16 bit code
+; org 0x0800      ; Bootloader will have data segment set to where this code is loaded
+bits 16         ; Generate 16 bit code
 
 ; Start kernel
 jmp start
@@ -37,6 +37,10 @@ jmp start
     FloppyGeometryCylinders     dw 0
     FloppyGeometryHeads         db 0
     FloppyGeometrySectors       db 0
+    
+    ; FAT Buffer pointers
+    FATBuffersSegment           dw 0x1000
+    FATBootSectorPointer        dw 0
 
 ;
 
@@ -55,7 +59,7 @@ start:
     call    prtstr
     
     ; Get drive geometry
-    mov     dl, 0
+    mov     dl, 0x00
     call    floppy_get_geometry
     jc get_geometry_fail
     
@@ -80,6 +84,12 @@ start:
     xor     ax, ax
     mov     al, byte [FloppyGeometrySectors]
     call    prtnumdec
+    lea     si, endl         
+    call    prtstr
+    
+    ; Test print binary number
+    mov     ax, 0xA0FF
+    call    prtnumbin
     lea     si, endl         
     call    prtstr
 
@@ -202,7 +212,47 @@ prtnumdec_prt_done:
     popa
     ret
 
-prtnumdec_buf       db 0 dup(5) ; Buffer for reversing number
+prtnumdec_buf       db 5 dup(0) ; Buffer for reversing number
+;
+;--------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Print binary number
+; Parameters:
+;   - ax: number to print
+;                        
+prtnumbin:
+    pusha
+    
+    mov     cx, 16          ; Print 16 bits
+
+prtnumbin_lp:
+    
+
+    ; Get next digit
+    shl     ax, 1
+    push    ax
+    jc  prtnumbin_1
+    
+    mov     al, '0'         ; '0' character
+    jmp prtnumbin_com
+
+prtnumbin_1:
+    mov     al, '1' ; '1' character
+
+prtnumbin_com:
+    ; Call print interrupt
+    mov     ah, 0x0E ; Print char in tty mode
+    int     10h
+    
+    pop     ax
+
+    loop prtnumbin_lp    ; Next digit
+    
+    
+    popa
+    ret
+
 ;
 ;--------------------------------------------------------------------------------------------------
 
@@ -253,6 +303,34 @@ floppy_get_geometry_fail:
     ret
 ;
 ;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Read sector from floppy
+; Parameters:
+;   - dl:   drive number
+;   - ax:   cylinder
+;   - dh:   head
+;   - cl:   sector
+;   - es:bx buffer to read to (must be 512 bytes)
+; Carry set on fail
+;                        
+floppy_read_sector:
+    pusha
+    
+    mov     cl, al  ; Low order bits of cylinder
+    shl     ah, 6   ; Put low bits of high order byte of culinder in high two bits of bh
+    or      ch, ah  ; Construct cl with bits as CCSSSSSS (C=cyl, S=sec)
+
+    mov     ax, cx
+    call    prtnumdec
+    
+    ; int     13h     ; Read sector
+
+    popa
+    ret
+;
+;------------------------------------------------------------------------------------------------------------
+
 
 ;
 ;----------------------------------------------------------------------------------------------------------------------
