@@ -1,3 +1,4 @@
+# Directories
 OUT_DIR=out
 BUILD_DIR=build
 SRC_DIR=src
@@ -16,10 +17,14 @@ PLAYER_SRC = $(SRC_DIR)/player.asm
 BOOT_BIN=$(BUILD_DIR)/boot.bin
 PLAYER_BIN=$(BUILD_DIR)/player.bin
 
-# Tools
+# Build Tools
 NASM=nasm
 DD=dd
 MKFS_FAT=mkfs.fat
+
+# Emulator
+DOSBOX=dosbox
+DOSBOX_ARGS=-C "BOOT $(DISK_IMG_PATH)"
 
 # Main build target
 $(DISK_IMG_PATH): $(BOOT_BIN) $(PLAYER_BIN)
@@ -39,6 +44,10 @@ $(BOOT_BIN): $(BOOT_SRC)
 $(PLAYER_BIN): $(PLAYER_SRC)
 	mkdir -p $(BUILD_DIR)
 	$(NASM) -f bin -o $(PLAYER_BIN) $(PLAYER_SRC)
+
+# Emulator
+run: $(DISK_IMG_PATH)
+	$(DOSBOX) $(DOSBOX_ARGS)
 
 # Clean target
 clean:
