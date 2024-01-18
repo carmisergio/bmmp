@@ -55,6 +55,7 @@ floppy_get_geometry_fail:
 ;   - cl:   sector
 ;   - es:bx buffer to read to (must be 512 bytes)
 ; Carry set on fail
+; TODO: reset floppy controller on fail
 ;                        
 floppy_read_sector:
     pusha
@@ -67,17 +68,6 @@ floppy_read_sector:
     mov     byte [bp-1], 5 ; retries = 5
 
 floppy_read_sector_lp:
-
-    push ax
-    push si
-    xor ax, ax
-    mov al, byte [bp-1]
-    call prtnumdec
-    lea si, endl
-    call prtstr
-    pop si
-    pop ax
-
 
     ; Form cx register
     mov     ch, al          ; Low order bits of cylinder
@@ -94,6 +84,10 @@ floppy_read_sector_lp:
     ; Check if there are still retries
     dec byte [bp-1]              ; retries--
     jz floppy_read_sector_fail
+    
+    ; Reset disk system
+    mov     ah, 0x00        ; Reset disk system
+    int     13h
     
     jmp floppy_read_sector_lp ; Next retry
     

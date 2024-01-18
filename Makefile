@@ -12,6 +12,7 @@ RESERVED_SECTORS=2 # 1 is Boot sector only
 #  Source files
 BOOT_SRC = $(SRC_DIR)/boot.asm
 PLAYER_SRC = $(SRC_DIR)/player.asm
+FLOPPY_SRC = $(SRC_DIR)/floppy.asm
 
 # Build files
 BOOT_BIN=$(BUILD_DIR)/boot.bin
@@ -41,7 +42,7 @@ $(BOOT_BIN): $(BOOT_SRC)
 	$(NASM) -f bin -o $(BOOT_BIN) $(BOOT_SRC)
 	
 # Player kernel build target
-$(PLAYER_BIN): $(PLAYER_SRC)
+$(PLAYER_BIN): $(PLAYER_SRC) $(FLOPPY_SRC)
 	mkdir -p $(BUILD_DIR)
 	$(NASM) -f bin -I $(SRC_DIR) -o $(PLAYER_BIN) $(PLAYER_SRC)
 

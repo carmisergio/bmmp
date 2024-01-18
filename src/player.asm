@@ -98,7 +98,7 @@ start:
     mov     dl, 0
     mov     ax, 0
     mov     dh, 0
-    mov     cl, 2 
+    mov     cl, 1 
     mov     bx, 0
     call    floppy_read_sector
     jc get_geometry_fail
