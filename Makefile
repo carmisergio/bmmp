@@ -43,7 +43,7 @@ $(BOOT_BIN): $(BOOT_SRC)
 # Player kernel build target
 $(PLAYER_BIN): $(PLAYER_SRC)
 	mkdir -p $(BUILD_DIR)
-	$(NASM) -f bin -o $(PLAYER_BIN) $(PLAYER_SRC)
+	$(NASM) -f bin -I $(SRC_DIR) -o $(PLAYER_BIN) $(PLAYER_SRC)
 
 # Emulator
 run: $(DISK_IMG_PATH)

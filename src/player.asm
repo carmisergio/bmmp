@@ -88,10 +88,24 @@ start:
     call    prtstr
     
     ; Test print binary number
-    mov     ax, 0xA0FF
+    ; mov     ax, 0xA0FF
+    ; call    prtnumbin
+    ; lea     si, endl         
+    ; call    prtstr
+    
+    mov     ax, 0x0900
+    mov     es, ax
+    mov     dl, 0
+    mov     ax, 0
+    mov     dh, 0
+    mov     cl, 2 
+    mov     bx, 0
+    call    floppy_read_sector
+    jc get_geometry_fail
+    
+    xor     ax, ax
+    mov     ax, word [es:0]
     call    prtnumbin
-    lea     si, endl         
-    call    prtstr
 
 
     jmp haltlp
@@ -172,7 +186,18 @@ clearscr:
 prtnumdec:
     pusha
     
-    xor bx, bx          ; No digits read
+    ; Allocate local vars (5 chars)
+    push bp
+    mov     bp, sp
+    sub     sp, 5
+    
+
+    ; pop sp
+    ; pop bp
+    ; popa
+    ; ret
+    
+    xor     si, si      ; No digits read
 
 prtnumdec_lp:
     ; Divide by 10
@@ -182,8 +207,9 @@ prtnumdec_lp:
     
     ; Store digit in buffer
     add     dl, '0'     ; ASCII value of digit
-    mov     byte [prtnumdec_buf+bx], dl
-    inc     bx          ; Number of digits
+    ; mov     byte [prtnumdec_buf+bx], dl
+    mov     byte [bp-5+si], dl
+    inc     si          ; Number of digits
 
     ; Check if number is 0
     cmp     ax, 0
@@ -197,11 +223,11 @@ prtnumdec_done:
 
 prtnumdec_prt_lp:
 
-    dec     bx                      ; Decrement counter
+    dec     si                      ; Decrement counter
     js      prtnumdec_prt_done      ; Last bx was 0
 
     ; Print character
-    mov     al, byte [prtnumdec_buf+bx] ; Get digit from buffer
+    mov     al, byte [bp-5+si] ; Get digit from buffer
     int     10h
     
     
@@ -209,10 +235,12 @@ prtnumdec_prt_lp:
 
 prtnumdec_prt_done:
 
+    ; Restore stack
+    mov     sp, bp
+    pop     bp
+
     popa
     ret
-
-prtnumdec_buf       db 5 dup(0) ; Buffer for reversing number
 ;
 ;--------------------------------------------------------------------------------------------------
 
@@ -259,78 +287,4 @@ prtnumbin_com:
 ;
 ;----------------------------------------------------------------------------------------------------------------------
 
-;----------------------------------------------------------------------------------------------------------------------
-; FAT12 Floppy code
-
-;--------------------------------------------------------------------------------------------------
-; Get floppy geometry from BIOS and store info in global floppy geomtry variables
-; Parameters:
-;   - dl:   drive number
-; Carry set on fail
-;                        
-floppy_get_geometry:
-    pusha
-
-    ; Get drive geomtry from BIOS
-    mov     ah, 0x08    ; Get current drive parameters
-    int     13h
-    
-    ; Check for command success (carry is set on fail)
-    jc      floppy_get_geometry_fail
-    
-    ; Copy info into the floppy geometry variables
-    
-    ; Heads
-    inc     dh  ; Head number if 0-based
-    mov     byte [FloppyGeometryHeads], dh 
-    
-    ; Sectors per track
-    mov     byte [FloppyGeometrySectors], cl
-    and     byte [FloppyGeometrySectors], 0b00111111 ; Bits 6 & 7 are high bits of cylinder count
-    
-    ; Cylinders
-    mov     al, ch
-    mov     ah, cl
-    and     ah, 0b11000000  ; Only bits 6 and 7 are of cylinders
-    ror     ah, 6           ; Put high order bits in low order bits of the high part of ax
-    inc     ax              ; 0-base number
-    mov     word [FloppyGeometryCylinders], ax
-
-
-floppy_get_geometry_fail:
-
-    popa
-    ret
-;
-;------------------------------------------------------------------------------------------------------------
-
-;--------------------------------------------------------------------------------------------------
-; Read sector from floppy
-; Parameters:
-;   - dl:   drive number
-;   - ax:   cylinder
-;   - dh:   head
-;   - cl:   sector
-;   - es:bx buffer to read to (must be 512 bytes)
-; Carry set on fail
-;                        
-floppy_read_sector:
-    pusha
-    
-    mov     cl, al  ; Low order bits of cylinder
-    shl     ah, 6   ; Put low bits of high order byte of culinder in high two bits of bh
-    or      ch, ah  ; Construct cl with bits as CCSSSSSS (C=cyl, S=sec)
-
-    mov     ax, cx
-    call    prtnumdec
-    
-    ; int     13h     ; Read sector
-
-    popa
-    ret
-;
-;------------------------------------------------------------------------------------------------------------
-
-
-;
-;----------------------------------------------------------------------------------------------------------------------
+%include "floppy.asm"
