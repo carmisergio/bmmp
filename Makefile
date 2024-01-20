@@ -7,7 +7,7 @@ SRC_DIR=src
 DISK_IMG_PATH=$(OUT_DIR)/disk.img
 DISK_IMG_BS=512
 DISK_IMG_BLOCKS=2880
-RESERVED_SECTORS=2 # 1 is Boot sector only
+RESERVED_SECTORS=3 # 1 is Boot sector only
 
 #  Source files
 BOOT_SRC = $(SRC_DIR)/boot.asm
@@ -22,6 +22,7 @@ PLAYER_BIN=$(BUILD_DIR)/player.bin
 NASM=nasm
 DD=dd
 MKFS_FAT=mkfs.fat
+MCOPY=mcopy
 
 # Emulator
 DOSBOX=dosbox
@@ -35,6 +36,10 @@ $(DISK_IMG_PATH): $(BOOT_BIN) $(PLAYER_BIN)
 	$(MKFS_FAT) -F 12 -R $(RESERVED_SECTORS) -C $(DISK_IMG_PATH) $$((($(DISK_IMG_BLOCKS)*$(DISK_IMG_BS))/1024))
 	$(DD) if=$(BOOT_BIN) of=$(DISK_IMG_PATH) bs=$(DISK_IMG_BS) conv=notrunc
 	$(DD) if=$(PLAYER_BIN) of=$(DISK_IMG_PATH) bs=$(DISK_IMG_BS) seek=1 conv=notrunc
+	
+	$(MCOPY) -i $(DISK_IMG_PATH) $(FLOPPY_SRC) ::/
+	$(MCOPY) -i $(DISK_IMG_PATH) $(BOOT_SRC) ::/
+	$(MCOPY) -i $(DISK_IMG_PATH) $(BOOT_BIN) ::/
 
 # Bootloader build target
 $(BOOT_BIN): $(BOOT_SRC)

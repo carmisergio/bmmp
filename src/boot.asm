@@ -8,7 +8,7 @@
 ;-----------------------------------------------------------------------------------------------------------------------
 
 ; Config parameters
-%define KERNERL_SECTORS     1 ; Must be <= 17
+%define KERNERL_SECTORS     2 ; Must be <= 17
 %define VOLUME_LABEL        "SCMusPlayer" ; Must be 11 char long, pad with space if necessary
 
 ;==================================

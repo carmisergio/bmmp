@@ -4,6 +4,59 @@
 ; Date: 18/01/2023                                                                                                     
 ;-----------------------------------------------------------------------------------------------------------------------
 
+%define FAT12_BUFFER_SEGMENT 0x2000
+
+;--------------------------------------------------------------------------------------------------
+; Floppy BPB offsets
+;
+
+; BPB
+%define FAT12_BPB_OFST_BYTES_PER_SECTOR     0x0B
+%define FAT12_BPB_OFST_SECTORS_PER_CLUSTER  0x0D
+%define FAT12_BPB_OFST_RESERVED_SECTORS     0x0E
+%define FAT12_BPB_OFST_NUMBER_OF_FATS       0x10
+%define FAT12_BPB_OFST_ROOT_ENTRIES         0x11
+%define FAT12_BPB_OFST_TOTAL_SECTORS        0x13
+%define FAT12_BPB_OFST_MEDIA_DESCRIPTOR     0X15
+%define FAT12_BPB_OFST_SECTORS_PER_FAT      0x16
+%define FAT12_BPB_OFST_SECTORS_PER_TRACK    0x18
+%define FAT12_BPB_OFST_NUMBER_OF_HEADS      0x1A
+%define FAT12_BPB_OFST_HIDDEN_SECTORS       0x1C
+%define FAT12_BPB_OFST_LARGE_SECTOR_COUNT   0x20
+
+; EBPB
+%define FAT12_BPB_OFST_DRIVE_NUMBER         0x24
+%define FAT12_BPB_OFST_SIGNATURE            0x26
+%define FAT12_BPB_OFST_VOLUME_ID            0x27
+%define FAT12_BPB_OFST_VOLUME_LABEL         0x2B
+%define FAT12_BPB_OFST_SYSTEM_IDENTIFIER    0x36
+
+; Directory table entry
+%define FAT12_DIR_ENTRY_SIZE                32      ; Bytes
+
+;
+;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Floppy info
+;
+
+    FloppyDriveNumber           db 0
+
+    FloppyGeometryCylinders     dw 0
+    FloppyGeometryHeads         db 0
+    FloppyGeometrySectors       db 0
+    
+    FloppyFATBytesPerSector     dw 0
+    FloppyFATSectorsPerCluster  db 0
+    FloppyFATReservedSectors    dw 0
+    FloppyFATNumberOfFATs       db 0
+    FloppyFATRootEntries        dw 0
+    FloppyFATSectorsPerFAT      dw 0
+    
+    FloppyBufferRootDir         dw 0
+;
+;------------------------------------------------------------------------------------------------------------
 ;--------------------------------------------------------------------------------------------------
 ; Get floppy geometry from BIOS and store info in global floppy geomtry variables
 ; Parameters:
@@ -37,9 +90,22 @@ floppy_get_geometry:
     ror     ah, 6           ; Put high order bits in low order bits of the high part of ax
     inc     ax              ; 0-base number
     mov     word [FloppyGeometryCylinders], ax
+    
+    ; Check disk geomtry 
+    cmp     byte [FloppyGeometryCylinders], 0
+    je      floppy_get_geometry_fail
+    cmp     byte [FloppyGeometryHeads], 0
+    je      floppy_get_geometry_fail
+    cmp     byte [FloppyGeometrySectors], 0
+    je      floppy_get_geometry_fail
 
+    clc
+    jmp floppy_get_geometry_done
 
 floppy_get_geometry_fail:
+    stc
+
+floppy_get_geometry_done:
 
     popa
     ret
@@ -49,13 +115,11 @@ floppy_get_geometry_fail:
 ;--------------------------------------------------------------------------------------------------
 ; Read sector from floppy
 ; Parameters:
-;   - dl:   drive number
 ;   - ax:   cylinder
 ;   - dh:   head
 ;   - cl:   sector
 ;   - es:bx buffer to read to (must be 512 bytes)
 ; Carry set on fail
-; TODO: reset floppy controller on fail
 ;                        
 floppy_read_sector:
     pusha
@@ -64,6 +128,9 @@ floppy_read_sector:
     push    bp
     mov     bp, sp 
     sub     sp, 1 ; byte retries
+    
+    ; Get drive number
+    mov     dl, [FloppyDriveNumber]
 
     mov     byte [bp-1], 5 ; retries = 5
 
@@ -108,3 +175,291 @@ floppy_read_sector_done:
     ret
 ;
 ;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Read sector from floppy with LBA addressing
+; Parameters:
+;   - ax:   LBA address
+;   - es:bx buffer to read to (must be 512 bytes)
+; Carry set on fail
+;                        
+floppy_read_sector_lba:
+    pusha
+
+    ; Compute sector
+    div     byte [FloppyGeometrySectors] 
+    mov     cl, ah          ; Save Sector
+    inc     cl
+    
+    ; Compute heads
+    xor     ah, ah
+    div     byte [FloppyGeometryHeads]
+    mov     dh, ah          ; Save Head
+
+    ; Compute cylinder (already have cylinder in cl)
+    xor     ah, ah
+    
+    ; Actually perform the read
+    ; mov     dl, 0
+    ; mov     ax, 0 
+    ; mov     dh, 0
+    ; mov     cl, 1
+    ; mov     bx, 0
+    call    floppy_read_sector
+
+    ; call    prtnumdec
+    ; call    prtendl
+
+    ; xor     ax, ax
+    ; mov     al, dh
+    ; call    prtnumdec
+    ; call    prtendl
+
+    ; xor     ax, ax
+    ; mov     al, cl
+    ; call    prtnumdec
+    ; call    prtendl
+    
+    
+    popa
+    ret
+;
+;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Read multiple sectors from floppy with LBA addressing (Requires FAT parameters to be loaded)
+; Parameters:
+;   - ax:   LBA address
+;   - cx:   Number of sectors
+;   - es:bx buffer to read to (must be 512 bytes)
+; Carry set on fail
+;                        
+floppy_read_sectors_lba:
+    pusha
+
+floppy_read_sectors_lba_lp:
+
+    ; Read sector
+    call    floppy_read_sector_lba
+    jc      floppy_read_sectors_lba_fail
+    
+
+    add     bx, [FloppyFATBytesPerSector] ; Increment buffer pointer
+    
+    inc     ax  ; Next sector
+    
+    loop    floppy_read_sectors_lba_lp 
+    
+    jmp     floppy_read_sectors_lba_done
+
+floppy_read_sectors_lba_fail:  
+    stc
+
+floppy_read_sectors_lba_done:
+    
+    popa
+    ret
+;
+;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Read root directory from floppy to appropriate buffer
+; Parameters:
+;   - es:bx buffer to floppy buffer area
+; Carry set on fail
+;                        
+floppy_read_root:
+    pusha
+    
+    ; Avoid divide by 0
+    cmp     word [FloppyFATBytesPerSector], 0
+    je      floppy_read_root_fail
+    
+    ; Compute root size
+    xor     dx, dx
+    mov     ax, word [FloppyFATRootEntries]
+    mov     cx, FAT12_DIR_ENTRY_SIZE  ; Root entry size
+    mul     cx
+    div     word [FloppyFATBytesPerSector]
+    mov     cx, ax ; cx -> Number of sectors in root
+
+    ; Compute root start LBA address
+    xor     ax, ax
+    mov     al, byte [FloppyFATNumberOfFATs]
+    mul     word [FloppyFATSectorsPerFAT]
+    add     ax, [FloppyFATReservedSectors]
+    
+    ; Read sectors
+    mov     bx, word [FloppyBufferRootDir]  ; Set buffer location
+    call floppy_read_sectors_lba
+    jc floppy_read_root_fail
+    
+    clc
+    jmp floppy_read_root_done
+
+floppy_read_root_fail:
+    stc
+    
+floppy_read_root_done:
+
+    popa
+    ret
+;
+;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Mounts a FAT12 filesystem
+; Parameters:
+;   - dl:   drive number
+;                        
+floppy_mount:
+    pusha
+    
+    ; Local variables
+    push    bp
+    mov     bp, sp 
+    ; sub     sp, 1 ; byte retries
+    
+    ; Save drive number
+    mov     byte [FloppyDriveNumber], dl
+    
+    ; Get disk geometry
+    call    floppy_get_geometry
+    jc      floppy_mount_fail
+
+    ; Load BPB (sector 0)
+    mov     ax, FAT12_BUFFER_SEGMENT
+    mov     es, ax
+    mov     ax, 0               ; LBA adderss = 0
+    mov     bx, 0
+    call    floppy_read_sector_lba
+    jc      floppy_mount_fail 
+    
+    ; Check FAT12 signature
+    cmp     byte es:[bx+FAT12_BPB_OFST_SIGNATURE], 0x28
+    je      floppy_mount_sigok
+    cmp     byte es:[bx+FAT12_BPB_OFST_SIGNATURE], 0x29
+    je      floppy_mount_sigok
+    
+    ; TODO Implement number of clusters check
+
+    jmp     floppy_mount_fail
+
+floppy_mount_sigok:
+
+    ; Populate filesystem info block
+    mov     ax, word es:[bx+FAT12_BPB_OFST_BYTES_PER_SECTOR]
+    mov     word [FloppyFATBytesPerSector], ax
+
+    mov     al, byte es:[bx+FAT12_BPB_OFST_SECTORS_PER_CLUSTER]
+    mov     byte [FloppyFATSectorsPerCluster], al
+
+    mov     ax, word es:[bx+FAT12_BPB_OFST_RESERVED_SECTORS]
+    mov     word [FloppyFATReservedSectors], ax
+
+    mov     al, byte es:[bx+FAT12_BPB_OFST_NUMBER_OF_FATS]
+    mov     byte [FloppyFATNumberOfFATs], al
+
+    mov     ax, word es:[bx+FAT12_BPB_OFST_ROOT_ENTRIES]
+    mov     word [FloppyFATRootEntries], ax
+
+    mov     ax, word es:[bx+FAT12_BPB_OFST_SECTORS_PER_FAT]
+    mov     word [FloppyFATSectorsPerFAT], ax
+    
+    ; Read root directory
+    call    floppy_read_root
+    jc      floppy_mount_fail
+    
+
+    clc
+    jmp floppy_mount_done
+
+floppy_mount_fail:
+    stc
+    
+floppy_mount_done:
+    
+    ; Restore stack
+    mov     sp, bp
+    pop     bp
+
+    popa
+    ret
+;
+;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Print root directory
+;                        
+print_root_dir:
+    pusha
+
+    mov     ax, FAT12_BUFFER_SEGMENT 
+    mov     es, ax
+    mov     bx, word [FloppyBufferRootDir] ; Get address to root dir buffer
+    
+print_root_dir_lp:    
+    mov     cx, word [FloppyFATRootEntries]
+    
+    ; End directory
+    cmp     byte es:bx, 0x00
+    je print_root_dir_done
+
+    push    ds 
+    mov     ax, FAT12_BUFFER_SEGMENT 
+    mov     ds, ax
+    
+    call    print_file_name
+    call    prtendl
+
+    pop     ds
+
+    add     bx, FAT12_DIR_ENTRY_SIZE
+    
+    loop print_root_dir_lp
+    
+print_root_dir_done:
+
+    popa
+    ret
+;
+;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Print file name
+; Parameters:
+;   - es:bx: Pointer to start of file name
+;                        
+print_file_name:
+    pusha
+    
+    mov     cx, 8   ; Max chars in filename
+
+print_file_name_lp1:    
+
+    mov     al, es:bx   ; Get character
+    call    prtchar
+
+    inc     bx          ; Next char
+    loop    print_file_name_lp1 
+
+    mov     al, '.' ; . between file name and extension
+    call    prtchar
+    
+    mov     cx, 3   ; Max chars in extension
+
+print_file_name_lp2:
+
+    mov     al, es:bx   ; Get character
+    
+    call prtchar
+
+    inc     bx          ; Next char
+    loop    print_file_name_lp2 
+
+    popa
+    ret
+;
+;------------------------------------------------------------------------------------------------------------
+
+; TODO Implement long filenames

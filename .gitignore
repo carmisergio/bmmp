@@ -1,3 +1,5 @@
 # Build dirs
 build/
 out/
+
+*.img

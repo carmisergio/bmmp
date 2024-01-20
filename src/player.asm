@@ -30,18 +30,7 @@ jmp start
     msg_cylinders               db "Cylinders: ", 0x00
     msg_heads                   db "Heads: ", 0x00
     msg_sectors                 db "Sectors: ", 0x00
-    endl                        db 0x0A, 0x0D, 0x00 ; Endline
-    
-
-    ; Floppy disk info
-    FloppyGeometryCylinders     dw 0
-    FloppyGeometryHeads         db 0
-    FloppyGeometrySectors       db 0
-    
-    ; FAT Buffer pointers
-    FATBuffersSegment           dw 0x1000
-    FATBootSectorPointer        dw 0
-
+    msg_directory               db "DIR: ", 0x00
 ;
 
 ;--------------------------------------------------------------------------------------------------
@@ -52,69 +41,76 @@ start:
     ; Clear screen
     call    clearscr
 
-    ; Print message
-    lea     si, msg_hello         
-    call    prtstr                  
-    lea     si, endl         
-    call    prtstr
-    
-    ; Get drive geometry
-    mov     dl, 0x00
-    call    floppy_get_geometry
-    jc get_geometry_fail
+    ; Mount FAT12 disk
+    mov     dl, 1   ; Mount disk 0
+    call    floppy_mount
+    jc      fail 
+
+    ; ; Print message
+    ; lea     si, msg_hello         
+    ; call    prtstr                  
+    ; call    prtendl
     
     ; Print Drive geometry
     lea     si, msg_cylinders         
     call    prtstr                  
     mov     ax, word [FloppyGeometryCylinders]
     call    prtnumdec
-    lea     si, endl         
-    call    prtstr
+    call    prtendl
 
     lea     si, msg_heads
     call    prtstr                  
     xor     ax, ax
     mov     al, byte [FloppyGeometryHeads]
     call    prtnumdec
-    lea     si, endl         
-    call    prtstr
+    call    prtendl
 
     lea     si, msg_sectors
     call    prtstr                  
     xor     ax, ax
     mov     al, byte [FloppyGeometrySectors]
     call    prtnumdec
-    lea     si, endl         
+    call    prtendl
+    
+    ; mov     ax, word [FloppyFATBytesPerSector]
+    ; call    prtnumdec
+    ; call    prtendl
+
+    ; xor     ax, ax
+    ; mov     al, byte [FloppyFATSectorsPerCluster]
+    ; call    prtnumdec
+    ; call    prtendl
+
+    ; mov     ax, word [FloppyFATReservedSectors]
+    ; call    prtnumdec
+    ; call    prtendl
+
+    ; xor     ax, ax
+    ; mov     al, byte [FloppyFATNumberOfFATs]
+    ; call    prtnumdec
+    ; call    prtendl
+
+    ; mov     ax, word [FloppyFATRootEntries]
+    ; call    prtnumdec
+    ; call    prtendl
+
+    ; mov     ax, word [FloppyFATSectorsPerFAT]
+    ; call    prtnumdec
+    ; call    prtendl
+    
+
+    lea     si, msg_directory
     call    prtstr
-    
-    ; Test print binary number
-    ; mov     ax, 0xA0FF
-    ; call    prtnumbin
-    ; lea     si, endl         
-    ; call    prtstr
-    
-    mov     ax, 0x0900
-    mov     es, ax
-    mov     dl, 0
-    mov     ax, 0
-    mov     dh, 0
-    mov     cl, 1 
-    mov     bx, 0
-    call    floppy_read_sector
-    jc get_geometry_fail
-    
-    xor     ax, ax
-    mov     ax, word [es:0]
-    call    prtnumbin
+    call    prtendl
 
-
+    call print_root_dir 
+    
     jmp haltlp
 
-get_geometry_fail:
+fail:
     mov     si, msg_fail
     call    prtstr
-    lea     si, endl         
-    call    prtstr
+    call    prtendl
 
     
     
@@ -144,9 +140,8 @@ prtstr_char_lp:
     mov     al, [si]                ; Get next character
     cmp     al, 0                   ; Check if character is NULL
     jz      prtstr_done             ; If NULL, we're done
-    
-    mov     ah, 0Eh                 ; Write character in teletype mode
-    int     10h                     ; Call video BIOS interrupt
+
+    call    prtchar 
     
     inc     si                      ; Next character
     
@@ -154,6 +149,25 @@ prtstr_char_lp:
     
 prtstr_done:
     pop     si
+    pop     ax
+
+    ret
+;
+;--------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Print endl
+; Prints endl (0x0A 0x0D) to screen
+;                        
+prtendl:    
+
+    push    ax
+
+    mov     al, 0x0A                ; \r
+    call    prtchar
+    mov     al, 0x0D                ; \f
+    call    prtchar
+    
     pop     ax
 
     ret
@@ -191,12 +205,6 @@ prtnumdec:
     mov     bp, sp
     sub     sp, 5
     
-
-    ; pop sp
-    ; pop bp
-    ; popa
-    ; ret
-    
     xor     si, si      ; No digits read
 
 prtnumdec_lp:
@@ -219,8 +227,6 @@ prtnumdec_lp:
     
 prtnumdec_done:
 
-    mov     ah, 0x0E ; Print char in tty mode
-
 prtnumdec_prt_lp:
 
     dec     si                      ; Decrement counter
@@ -228,7 +234,7 @@ prtnumdec_prt_lp:
 
     ; Print character
     mov     al, byte [bp-5+si] ; Get digit from buffer
-    int     10h
+    call    prtchar
     
     
     jmp prtnumdec_prt_lp
@@ -269,9 +275,7 @@ prtnumbin_1:
     mov     al, '1' ; '1' character
 
 prtnumbin_com:
-    ; Call print interrupt
-    mov     ah, 0x0E ; Print char in tty mode
-    int     10h
+    call    prtchar
     
     pop     ax
 
@@ -281,6 +285,23 @@ prtnumbin_com:
     popa
     ret
 
+;
+;--------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Print character
+; Prints a single character to screen
+; Parameters:
+;   - al: character to print
+;                        
+prtchar:    
+    push ax
+
+    mov     ah, 0x0E ; Print char in tty mode
+    int     10h
+
+    pop ax
+    ret
 ;
 ;--------------------------------------------------------------------------------------------------
 
