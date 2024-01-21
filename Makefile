@@ -22,7 +22,10 @@ PLAYER_BIN=$(BUILD_DIR)/player.bin
 NASM=nasm
 DD=dd
 MKFS_FAT=mkfs.fat
+
+# Disk image manipulation tools
 MCOPY=mcopy
+MMD=mmd
 
 # Emulator
 DOSBOX=dosbox
@@ -39,7 +42,9 @@ $(DISK_IMG_PATH): $(BOOT_BIN) $(PLAYER_BIN)
 	
 	$(MCOPY) -i $(DISK_IMG_PATH) $(FLOPPY_SRC) ::/
 	$(MCOPY) -i $(DISK_IMG_PATH) $(BOOT_SRC) ::/
-	$(MCOPY) -i $(DISK_IMG_PATH) $(BOOT_BIN) ::/
+	$(MMD) -i $(DISK_IMG_PATH) subdir1
+	$(MMD) -i $(DISK_IMG_PATH) subdir2
+	$(MCOPY) -i $(DISK_IMG_PATH) $(BOOT_BIN) ::/subdir1
 
 # Bootloader build target
 $(BOOT_BIN): $(BOOT_SRC)

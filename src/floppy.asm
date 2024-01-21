@@ -33,6 +33,8 @@
 
 ; Directory table entry
 %define FAT12_DIR_ENTRY_SIZE                32      ; Bytes
+%define FAT12_DIR_ENTRY_OFST_ATTRIBUTES     0x0B    
+%define FAT12_DIR_ENTRY_OFST_LOW_CLUSTER    0x1A
 
 ;
 ;------------------------------------------------------------------------------------------------------------
@@ -53,8 +55,12 @@
     FloppyFATNumberOfFATs       db 0
     FloppyFATRootEntries        dw 0
     FloppyFATSectorsPerFAT      dw 0
-    
-    FloppyBufferRootDir         dw 0
+
+    FloppyFATRootStartSector    db 0
+    FloppyFATRootSize           dw 0
+
+    FloppyBufferFAT             dw 0 
+    FloppyBufferDir             dw 0
 ;
 ;------------------------------------------------------------------------------------------------------------
 ;--------------------------------------------------------------------------------------------------
@@ -263,6 +269,38 @@ floppy_read_sectors_lba_done:
 ;------------------------------------------------------------------------------------------------------------
 
 ;--------------------------------------------------------------------------------------------------
+; Read cluster from floppy
+; Parameters:
+;   - ax:   Cluster number
+;   - es:bx buffer to read to (must be at list ByesPerSector * SectorsPerCluster long)
+; Carry set on fail
+;                        
+floppy_read_cluster:
+    pusha
+    
+    ; Compute LBA address of cluster in ax
+    xor     dx, dx
+    sub     ax, 2
+    xor     cx, cx
+    mov     cl, byte [FloppyFATSectorsPerCluster]
+    mul     cx
+    mov     cl, byte [FloppyFATRootStartSector]
+    add     ax, cx
+    add     ax, word [FloppyFATRootSize]
+    
+    ; Get number of sectors per cluster in cx
+    xor     cx, cx
+    mov     cl, byte [FloppyFATSectorsPerCluster] 
+    
+    ; Read sectors
+    call floppy_read_sectors_lba
+
+    popa
+    ret
+;
+;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
 ; Read root directory from floppy to appropriate buffer
 ; Parameters:
 ;   - es:bx buffer to floppy buffer area
@@ -270,27 +308,16 @@ floppy_read_sectors_lba_done:
 ;                        
 floppy_read_root:
     pusha
-    
-    ; Avoid divide by 0
-    cmp     word [FloppyFATBytesPerSector], 0
-    je      floppy_read_root_fail
-    
-    ; Compute root size
-    xor     dx, dx
-    mov     ax, word [FloppyFATRootEntries]
-    mov     cx, FAT12_DIR_ENTRY_SIZE  ; Root entry size
-    mul     cx
-    div     word [FloppyFATBytesPerSector]
-    mov     cx, ax ; cx -> Number of sectors in root
 
-    ; Compute root start LBA address
+    ; Get root start LBA
     xor     ax, ax
-    mov     al, byte [FloppyFATNumberOfFATs]
-    mul     word [FloppyFATSectorsPerFAT]
-    add     ax, [FloppyFATReservedSectors]
+    mov     al, byte [FloppyFATRootStartSector]
+    
+    ; Get root size
+    mov     cx, word [FloppyFATRootSize]
     
     ; Read sectors
-    mov     bx, word [FloppyBufferRootDir]  ; Set buffer location
+    mov     bx, word [FloppyBufferDir]  ; Set buffer location
     call floppy_read_sectors_lba
     jc floppy_read_root_fail
     
@@ -301,6 +328,35 @@ floppy_read_root_fail:
     stc
     
 floppy_read_root_done:
+
+    popa
+    ret
+;
+;-----------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Load FAT from floppy
+; Parameters:
+;   - es:bx buffer to floppy buffer area
+; Carry set on fail
+;                        
+floppy_load_fat:
+    pusha
+
+    ; Read sectors
+    mov     ax, word [FloppyFATReservedSectors] ; First FAT starts after reserved sectors
+    mov     cx, word [FloppyFATSectorsPerFAT]   ; Numbe of sectors to read
+    mov     bx, word [FloppyBufferFAT]          ; Set buffer location
+    call floppy_read_sectors_lba
+    jc floppy_read_root_fail
+    
+    clc
+    jmp floppy_load_fat_done
+
+floppy_load_fat_fail:
+    stc
+    
+floppy_load_fat_done:
 
     popa
     ret
@@ -340,14 +396,12 @@ floppy_mount:
     je      floppy_mount_sigok
     cmp     byte es:[bx+FAT12_BPB_OFST_SIGNATURE], 0x29
     je      floppy_mount_sigok
-    
-    ; TODO Implement number of clusters check
 
     jmp     floppy_mount_fail
 
 floppy_mount_sigok:
 
-    ; Populate filesystem info block
+    ; Populate filesystem info data
     mov     ax, word es:[bx+FAT12_BPB_OFST_BYTES_PER_SECTOR]
     mov     word [FloppyFATBytesPerSector], ax
 
@@ -366,8 +420,38 @@ floppy_mount_sigok:
     mov     ax, word es:[bx+FAT12_BPB_OFST_SECTORS_PER_FAT]
     mov     word [FloppyFATSectorsPerFAT], ax
     
+    ; Avoid divide by 0
+    cmp     word [FloppyFATBytesPerSector], 0
+    je      floppy_read_root_fail
+    
+    ; Compute root size
+    xor     dx, dx
+    mov     ax, word [FloppyFATRootEntries]
+    mov     cx, FAT12_DIR_ENTRY_SIZE  ; Root entry size
+    mul     cx
+    div     word [FloppyFATBytesPerSector]
+    mov     word [FloppyFATRootSize], ax ; Save root size
+    
+    ; Compute root start LBA address
+    xor     ax, ax
+    mov     al, byte [FloppyFATNumberOfFATs]
+    mul     word [FloppyFATSectorsPerFAT]
+    add     ax, [FloppyFATReservedSectors]
+    mov     byte [FloppyFATRootStartSector], al ; Save root start sector
+    
+    ; Compute buffer pointers
+    xor     dx, dx
+    mov     ax, word [FloppyFATBytesPerSector]
+    mul     word [FloppyFATSectorsPerFAT]
+    mov     word [FloppyBufferDir], ax  ; After FAT there the dir
+    
+    
     ; Read root directory
     call    floppy_read_root
+    jc      floppy_mount_fail
+    
+    ; Read File Allocation Table
+    call    floppy_load_fat
     jc      floppy_mount_fail
     
 
@@ -389,36 +473,113 @@ floppy_mount_done:
 ;------------------------------------------------------------------------------------------------------------
 
 ;--------------------------------------------------------------------------------------------------
+; Get next cluster
+; Paremeters:
+;   - ax: current cluster
+;   - es:bx pointer to floppy buffer
+; Returns:
+;   - ax: next cluster
+;
+floppy_get_next_cluster:
+    push    bx
+    push    cx
+    push    dx
+    push    es
+    
+    ; Get pointer to start of FAT buffer (floppy buffer + FloppyBufferFAT)
+    add     bx, word [FloppyBufferFAT]
+    
+    ; Compute 3/2 of current cluster (because 12 bit)
+    mov     cx, ax
+    shr     cx, 1       ; Divide by 2
+    add     ax, cx
+    
+    ; Get word containing next cluster
+    add     bx, ax      ; Get pointer to this cluster
+    mov     ax, word es:[bx] ; Read word containing cluster
+    
+    ; Check if cluster was even or odd
+    test    dx, 1       ; Check last bit of current cluster
+    jnz     floppy_get_next_cluster_odd
+
+    ; Even clster
+    and     ax, 0x0FFF ; Get least significant 12 bits
+    
+    jmp floppy_get_next_cluster_done
+
+floppy_get_next_cluster_odd:
+    ; Odd cluster
+    shr     ax, 4       ; Get most significant 12 bits
+
+floppy_get_next_cluster_done:
+
+    push    es
+    push    dx
+    push    cx
+    push    bx
+    ret
+;
+;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Get LBA address from cluster number
+;                        
+;
+;------------------------------------------------------------------------------------------------------------
+
+
+;--------------------------------------------------------------------------------------------------
 ; Print root directory
 ;                        
-print_root_dir:
+print_dir:
     pusha
 
     mov     ax, FAT12_BUFFER_SEGMENT 
     mov     es, ax
-    mov     bx, word [FloppyBufferRootDir] ; Get address to root dir buffer
-    
-print_root_dir_lp:    
-    mov     cx, word [FloppyFATRootEntries]
-    
-    ; End directory
-    cmp     byte es:bx, 0x00
-    je print_root_dir_done
+    mov     bx, word [FloppyBufferDir] ; Get address to dir buffer
 
-    push    ds 
-    mov     ax, FAT12_BUFFER_SEGMENT 
-    mov     ds, ax
+    ; Entry counter 
+    mov     dx, 0
     
+    mov     cx, word [FloppyFATRootEntries]
+print_dir_lp:    
+
+    ; Check if this entry is the last in the dir
+    cmp     byte es:[bx], 0x00
+    je      print_dir_done
+    
+    ; Check if this entry is free
+    cmp     byte es:[bx], 0xE5
+    je      print_dir_common
+    
+    ; Check if entry is file or subdirectory
+    cmp     byte es:[bx+FAT12_DIR_ENTRY_OFST_ATTRIBUTES], 0x10
+    je      print_dir_subdir
+
     call    print_file_name
     call    prtendl
 
-    pop     ds
+    jmp     print_dir_common
+print_dir_subdir:
+    
+    call    print_dir_name
+    
+    ; Print directory number
+    push    ax
+    mov     ax, dx
+    call    prtnumdec
+    pop     ax
 
+    call    prtendl
+    
+    inc     dx
+
+print_dir_common:
     add     bx, FAT12_DIR_ENTRY_SIZE
     
-    loop print_root_dir_lp
+    loop print_dir_lp
     
-print_root_dir_done:
+print_dir_done:
 
     popa
     ret
@@ -428,7 +589,7 @@ print_root_dir_done:
 ;--------------------------------------------------------------------------------------------------
 ; Print file name
 ; Parameters:
-;   - es:bx: Pointer to start of file name
+;   - es:bx: Pointer to start of file entry
 ;                        
 print_file_name:
     pusha
@@ -462,4 +623,29 @@ print_file_name_lp2:
 ;
 ;------------------------------------------------------------------------------------------------------------
 
-; TODO Implement long filenames
+;--------------------------------------------------------------------------------------------------
+; Print directory name
+; Parameters:
+;   - es:bx: Pointer to start of directory entry
+;                        
+print_dir_name:
+    pusha
+    
+    mov     cx, 8   ; Max chars in filename
+
+print_dir_name_lp1:    
+
+    mov     al, es:bx   ; Get character
+    call    prtchar
+
+    inc     bx          ; Next char
+    loop    print_dir_name_lp1 
+
+    lea     si, msg_dir
+    call    prtstr
+
+    popa
+    ret
+msg_dir     db "     <DIR>  "
+;
+;------------------------------------------------------------------------------------------------------------

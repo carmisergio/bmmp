@@ -31,6 +31,7 @@ jmp start
     msg_heads                   db "Heads: ", 0x00
     msg_sectors                 db "Sectors: ", 0x00
     msg_directory               db "DIR: ", 0x00
+    msg_prompt                  db "> ", 0x00
 ;
 
 ;--------------------------------------------------------------------------------------------------
@@ -42,7 +43,7 @@ start:
     call    clearscr
 
     ; Mount FAT12 disk
-    mov     dl, 1   ; Mount disk 0
+    mov     dl, 0   ; Mount disk 0
     call    floppy_mount
     jc      fail 
 
@@ -52,25 +53,25 @@ start:
     ; call    prtendl
     
     ; Print Drive geometry
-    lea     si, msg_cylinders         
-    call    prtstr                  
-    mov     ax, word [FloppyGeometryCylinders]
-    call    prtnumdec
-    call    prtendl
+    ; lea     si, msg_cylinders         
+    ; call    prtstr                  
+    ; mov     ax, word [FloppyGeometryCylinders]
+    ; call    prtnumdec
+    ; call    prtendl
 
-    lea     si, msg_heads
-    call    prtstr                  
-    xor     ax, ax
-    mov     al, byte [FloppyGeometryHeads]
-    call    prtnumdec
-    call    prtendl
+    ; lea     si, msg_heads
+    ; call    prtstr                  
+    ; xor     ax, ax
+    ; mov     al, byte [FloppyGeometryHeads]
+    ; call    prtnumdec
+    ; call    prtendl
 
-    lea     si, msg_sectors
-    call    prtstr                  
-    xor     ax, ax
-    mov     al, byte [FloppyGeometrySectors]
-    call    prtnumdec
-    call    prtendl
+    ; lea     si, msg_sectors
+    ; call    prtstr                  
+    ; xor     ax, ax
+    ; mov     al, byte [FloppyGeometrySectors]
+    ; call    prtnumdec
+    ; call    prtendl
     
     ; mov     ax, word [FloppyFATBytesPerSector]
     ; call    prtnumdec
@@ -99,11 +100,26 @@ start:
     ; call    prtendl
     
 
-    lea     si, msg_directory
-    call    prtstr
-    call    prtendl
+    ; lea     si, msg_directory
+    ; call    prtstr
+    ; call    prtendl
 
-    call print_root_dir 
+main_lp:
+    ; Print directory
+    call    print_dir 
+
+    ; Print prompt
+    mov     si, msg_prompt
+    call    prtstr
+    
+    ; Read number from user
+    call    innum_4d
+    
+    ; Print number
+    call    prtnumdec
+    call    prtendl
+    
+    jmp main_lp
     
     jmp haltlp
 
@@ -304,6 +320,131 @@ prtchar:
     ret
 ;
 ;--------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Input number 4 digit
+; Allows  user to enter a 4-digit-maximum number
+; If the user doesn't input anything, number is 0
+; Returns:
+;   - ax: inserted number
+;                        
+innum_4d:    
+    push bx
+    push cx
+    push dx
+    push si
+
+    ; Local variables
+    push    bp
+    mov     bp, sp
+    sub     sp, 2           ; uint16 num
+    
+    mov     word[bp-2], 0   ; num = 0
+    
+    mov     cx, 0           ; cx -> Number of digits read 
+    
+innum_4d_readch_lp:
+
+    ; Read character
+    call    readkeystr
+    
+    ; Check if character read was RETURN (input finished)
+    cmp     al, 0x0D        ; 0x0D -> RETURN
+    je      innum_4d_end    ; If RETURN pressed, finish input
+    
+    ; Check if character read was BACKSPACE
+    cmp     al, 0x08        ; 0x0D -> RETURN
+    je      innum_4d_bkspc  ; If RETURN pressed, finish input
+    
+    ; Check if tere are still characters to read
+    cmp     cx, 4           ; 4 -> max digits
+    jge     innum_4d_readch_lp  ; Ignore character
+    
+    ; Check if character is a valid digit
+    cmp     al, '0'
+    jl      innum_4d_readch_lp ; Ignore character
+    cmp     al, '9'
+    jg      innum_4d_readch_lp ; Ignore character
+    
+    ; Print charcter to screen
+    call    prtchar
+    
+    ; Compute digit value in bx
+    xor     bx, bx
+    mov     bl, al
+    sub     bl, '0'         ; bl = digit value
+
+    ; Shift number one decimal digit left
+    mov     ax, word [bp-2] ; Load current number
+    mov     dx, 10          ; Multiplier
+    mul     dx
+    
+    ; Add new digit
+    add     ax, bx
+    mov     word [bp-2], ax ; Store number back in memory
+    
+    inc     cx              ; digits read++
+    
+    jmp innum_4d_readch_lp
+
+innum_4d_bkspc:
+
+    ; Check if there are any characters to remove
+    cmp     cx, 0
+    je      innum_4d_readch_lp ; Ignore input
+    
+    dec     cx              ; digits read--
+    
+    ; Remove last digit from number
+    xor     dx, dx
+    mov     ax, word [bp-2] ; Load number
+    mov     bx, 10          ; Divisor
+    div     bx
+    mov     word [bp-2], ax ; Store number back in memory
+    
+    ; Erase charcter from screen
+    mov     al, 0x08        ; BACKSPACE
+    call    prtchar
+    mov     al, 0x20        ; SPACE
+    call    prtchar
+    mov     al, 0x08        ; SPACE
+    call    prtchar
+    
+    jmp innum_4d_readch_lp  ; Read next char
+
+innum_4d_end:
+    ; Print endline
+    call    prtendl
+    
+    ; Load result to ax
+    mov     ax, word [bp-2]
+    
+    ; Restore stack
+    mov     sp, bp
+    pop     bp
+    
+    pop     si
+    pop     dx
+    pop     cx
+    pop     bx
+    ret
+;
+;--------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Read keystroke
+; Reads a single keystroke from the keyboard
+; Returns:
+;   - ah: BIOS scan code
+;   - al: ASCII character
+;                        
+readkeystr:    
+    mov     ah, 0x00 ; Read keystroke
+    int     16h
+    ret
+;
+;--------------------------------------------------------------------------------------------------
+
 
 ;
 ;----------------------------------------------------------------------------------------------------------------------
