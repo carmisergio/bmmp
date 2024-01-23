@@ -4,7 +4,6 @@
 ; Date: 18/01/2023                                                                                                     
 ;-----------------------------------------------------------------------------------------------------------------------
 
-%define FAT12_BUFFER_SEGMENT 0x2000
 
 ;--------------------------------------------------------------------------------------------------
 ; Floppy BPB offsets
@@ -43,22 +42,27 @@
 ; Floppy info
 ;
 
-    FloppyDriveNumber           db 0
-
+    ; Stuff populated at mount
     FloppyGeometryCylinders     dw 0
     FloppyGeometryHeads         db 0
     FloppyGeometrySectors       db 0
-    
+    FloppyDriveNumber           db 0
     FloppyFATBytesPerSector     dw 0
     FloppyFATSectorsPerCluster  db 0
     FloppyFATReservedSectors    dw 0
     FloppyFATNumberOfFATs       db 0
     FloppyFATRootEntries        dw 0
     FloppyFATSectorsPerFAT      dw 0
-
     FloppyFATRootStartSector    db 0
     FloppyFATRootSize           dw 0
+    FloppyFATBytesPerCluster    dw 0
+    
+    ; Current directory info
+    FloppyFATLoadedDirSectors   dw 0
+    FloppyFATLoadedDirEntries   dw 0
 
+    ; FAT12 Buffer pointers
+    FloppyBuffrerSegment        dw 0
     FloppyBufferFAT             dw 0 
     FloppyBufferDir             dw 0
 ;
@@ -124,7 +128,7 @@ floppy_get_geometry_done:
 ;   - ax:   cylinder
 ;   - dh:   head
 ;   - cl:   sector
-;   - es:bx buffer to read to (must be 512 bytes)
+;   - es:bx buffer to read to (must be at least BytesPerSector bytes)
 ; Carry set on fail
 ;                        
 floppy_read_sector:
@@ -147,7 +151,8 @@ floppy_read_sector_lp:
     shl     ah, 6           ; Put low bits of high order byte of culinder in high two bits of bh
     and     cl, 0b00111111  ; Clean potentially dirty two bits
     or      cl, ah          ; Construct cl with bits as CCSSSSSS (C=cyl, S=sec)
-
+    
+    ; Read sector
     mov     ah, 0x02        ; Read sector
     mov     al, 1           ; Read 1 sector
     int     13h     
@@ -162,6 +167,7 @@ floppy_read_sector_lp:
     mov     ah, 0x00        ; Reset disk system
     int     13h
     
+    
     jmp floppy_read_sector_lp ; Next retry
     
 floppy_read_sector_fail:
@@ -172,6 +178,7 @@ floppy_read_sector_success:
     clc
     
 floppy_read_sector_done:
+    
     
     ; Restore stack
     mov     sp, bp
@@ -186,7 +193,7 @@ floppy_read_sector_done:
 ; Read sector from floppy with LBA addressing
 ; Parameters:
 ;   - ax:   LBA address
-;   - es:bx buffer to read to (must be 512 bytes)
+;   - es:bx buffer to read to (must be at least ByesPerSector bytes)
 ; Carry set on fail
 ;                        
 floppy_read_sector_lba:
@@ -205,28 +212,9 @@ floppy_read_sector_lba:
     ; Compute cylinder (already have cylinder in cl)
     xor     ah, ah
     
-    ; Actually perform the read
-    ; mov     dl, 0
-    ; mov     ax, 0 
-    ; mov     dh, 0
-    ; mov     cl, 1
-    ; mov     bx, 0
+    ; Perform read
     call    floppy_read_sector
 
-    ; call    prtnumdec
-    ; call    prtendl
-
-    ; xor     ax, ax
-    ; mov     al, dh
-    ; call    prtnumdec
-    ; call    prtendl
-
-    ; xor     ax, ax
-    ; mov     al, cl
-    ; call    prtnumdec
-    ; call    prtendl
-    
-    
     popa
     ret
 ;
@@ -237,7 +225,7 @@ floppy_read_sector_lba:
 ; Parameters:
 ;   - ax:   LBA address
 ;   - cx:   Number of sectors
-;   - es:bx buffer to read to (must be 512 bytes)
+;   - es:bx buffer to read to (must be at least BytesPerSector * cx bytes)
 ; Carry set on fail
 ;                        
 floppy_read_sectors_lba:
@@ -302,12 +290,14 @@ floppy_read_cluster:
 
 ;--------------------------------------------------------------------------------------------------
 ; Read root directory from floppy to appropriate buffer
-; Parameters:
-;   - es:bx buffer to floppy buffer area
 ; Carry set on fail
 ;                        
 floppy_read_root:
     pusha
+    
+    ; Setup extra segment
+    mov     ax, word [FloppyBuffrerSegment]
+    mov     es, ax
 
     ; Get root start LBA
     xor     ax, ax
@@ -320,6 +310,10 @@ floppy_read_root:
     mov     bx, word [FloppyBufferDir]  ; Set buffer location
     call floppy_read_sectors_lba
     jc floppy_read_root_fail
+    
+    ; Set Directory size
+    mov     ax, word [FloppyFATLoadedDirSectors]
+    mov     word [FloppyFATLoadedDirSectors], ax
     
     clc
     jmp floppy_read_root_done
@@ -336,12 +330,14 @@ floppy_read_root_done:
 
 ;--------------------------------------------------------------------------------------------------
 ; Load FAT from floppy
-; Parameters:
-;   - es:bx buffer to floppy buffer area
 ; Carry set on fail
 ;                        
 floppy_load_fat:
     pusha
+    
+    ; Setup extra segment
+    mov     ax, word [FloppyBuffrerSegment]
+    mov     es, ax
 
     ; Read sectors
     mov     ax, word [FloppyFATReservedSectors] ; First FAT starts after reserved sectors
@@ -367,14 +363,14 @@ floppy_load_fat_done:
 ; Mounts a FAT12 filesystem
 ; Parameters:
 ;   - dl:   drive number
+;   - es:bx pointer to floppy FAT buffer
 ;                        
 floppy_mount:
     pusha
     
-    ; Local variables
-    push    bp
-    mov     bp, sp 
-    ; sub     sp, 1 ; byte retries
+    ; Save floppy buffer segment
+    mov     cx, es
+    mov     word [FloppyBuffrerSegment], cx
     
     ; Save drive number
     mov     byte [FloppyDriveNumber], dl
@@ -382,12 +378,10 @@ floppy_mount:
     ; Get disk geometry
     call    floppy_get_geometry
     jc      floppy_mount_fail
-
+    
     ; Load BPB (sector 0)
-    mov     ax, FAT12_BUFFER_SEGMENT
-    mov     es, ax
-    mov     ax, 0               ; LBA adderss = 0
-    mov     bx, 0
+    mov     ax, 0                       ; LBA adderss = 0
+    ; bx is already at the start of the floppy buffer
     call    floppy_read_sector_lba
     jc      floppy_mount_fail 
     
@@ -420,6 +414,11 @@ floppy_mount_sigok:
     mov     ax, word es:[bx+FAT12_BPB_OFST_SECTORS_PER_FAT]
     mov     word [FloppyFATSectorsPerFAT], ax
     
+    ; Compute bytes per cluster
+    xor     dx, dx
+    mov     ax, word [FloppyFATBytesPerCluster]
+    mul     word [FloppyFATSectorsPerCluster]
+    
     ; Avoid divide by 0
     cmp     word [FloppyFATBytesPerSector], 0
     je      floppy_read_root_fail
@@ -440,20 +439,28 @@ floppy_mount_sigok:
     mov     byte [FloppyFATRootStartSector], al ; Save root start sector
     
     ; Compute buffer pointers
+    
+    mov     word [FloppyBufferFAT], bx          ; FAT buffer at beginning
+
     xor     dx, dx
     mov     ax, word [FloppyFATBytesPerSector]
     mul     word [FloppyFATSectorsPerFAT]
-    mov     word [FloppyBufferDir], ax  ; After FAT there the dir
-    
-    
-    ; Read root directory
-    call    floppy_read_root
-    jc      floppy_mount_fail
+    add     bx, ax
+    mov     word [FloppyBufferDir], bx          ; After FAT, currently loaded directory
     
     ; Read File Allocation Table
     call    floppy_load_fat
     jc      floppy_mount_fail
     
+    ; Read root directory
+    call    floppy_read_root
+    jc      floppy_mount_fail
+
+    ; Save directory info
+    mov     ax, word [FloppyFATRootSize]
+    mov     word [FloppyFATLoadedDirSectors],  ax
+    mov     ax, word [FloppyFATRootEntries]
+    mov     word [FloppyFATLoadedDirEntries],  ax
 
     clc
     jmp floppy_mount_done
@@ -463,10 +470,6 @@ floppy_mount_fail:
     
 floppy_mount_done:
     
-    ; Restore stack
-    mov     sp, bp
-    pop     bp
-
     popa
     ret
 ;
@@ -476,7 +479,6 @@ floppy_mount_done:
 ; Get next cluster
 ; Paremeters:
 ;   - ax: current cluster
-;   - es:bx pointer to floppy buffer
 ; Returns:
 ;   - ax: next cluster
 ;
@@ -486,8 +488,12 @@ floppy_get_next_cluster:
     push    dx
     push    es
     
+    ; Setup extra segment
+    mov     bx, word [FloppyBuffrerSegment]
+    mov     es, bx
+    
     ; Get pointer to start of FAT buffer (floppy buffer + FloppyBufferFAT)
-    add     bx, word [FloppyBufferFAT]
+    mov     bx, word [FloppyBufferFAT]
     
     ; Compute 3/2 of current cluster (because 12 bit)
     mov     cx, ax
@@ -513,17 +519,129 @@ floppy_get_next_cluster_odd:
 
 floppy_get_next_cluster_done:
 
-    push    es
-    push    dx
-    push    cx
-    push    bx
+    pop     es
+    pop     dx
+    pop     cx
+    pop     bx
     ret
 ;
 ;------------------------------------------------------------------------------------------------------------
 
-;--------------------------------------------------------------------------------------------------
-; Get LBA address from cluster number
-;                        
+;------------------------------------------------------------------------------------------------------------
+; Read file from disk to memory
+; Parameters:
+;   - ax: file start cluster
+;   - cx: maximum number of cluster to read
+;   - ex:bx: pointer to buffer where to read data
+; Returns:
+;   - dx: number of clusters read
+; Carry set on fail
+floppy_read_file:
+    push ax
+    push bx
+    push cx
+
+    xor     dx, dx         ; Sectors read    
+
+floppy_read_file_cluster_lp:
+
+    ; Read cluster
+    call    floppy_read_cluster
+    jc      floppy_read_file_fail
+
+    ; Increment number of sectors read
+    inc     dx
+    
+    ; Get next cluster
+    call    floppy_get_next_cluster
+
+    ; Check if cluster is the last cluster
+    cmp     ax, 0xFF8
+    jge     floppy_read_file_done
+    
+    ; Increment pointer by the cluster size
+    add     bx, word [FloppyFATBytesPerCluster]
+    
+
+    loop    floppy_read_file_cluster_lp ; Next cluster
+    
+floppy_read_file_success:
+    clc
+    
+floppy_read_file_fail:
+    stc
+    jmp     floppy_read_file_done
+    
+floppy_read_file_done:
+
+
+    pop cx
+    pop bx
+    pop ax
+    ret
+;
+;------------------------------------------------------------------------------------------------------------
+
+;------------------------------------------------------------------------------------------------------------
+; Load directory with cluster number
+; Parameters:
+;   - ax: directory start cluster
+; Carry set on fail
+floppy_load_dir:
+    pusha
+    
+    ; Check if directory to be loaded is the root directory
+    cmp     ax, 0
+    jne     floppy_load_dir_noroot
+    
+    
+    ; Load root directory
+    call    floppy_read_root 
+    
+    ; Save directory info
+    mov     ax, word [FloppyFATRootSize]
+    mov     word [FloppyFATLoadedDirSectors],  ax
+    mov     ax, word [FloppyFATRootEntries]
+    mov     word [FloppyFATLoadedDirEntries],  ax
+
+    jmp     floppy_load_dir_end
+
+floppy_load_dir_noroot:
+    ; Load non-root directory
+
+    ; Setup buffer segment 
+    mov     bx, word [FloppyBuffrerSegment] 
+    mov     es, bx 
+
+    ; Read directory "file" to memory in FAT directory buffer
+    mov     bx, word [FloppyBufferDir]
+    mov     cx, word [FloppyFATRootSize]        ; Maximum sectors to load
+    call    floppy_read_file
+    jc      floppy_load_dir_fail
+    
+    ; Save number of clusters in directory
+    mov     word [FloppyFATLoadedDirSectors], dx
+
+    ; Calculate number of directory entries
+    mov     ax, dx
+    xor     dx, dx
+    mov     cx, [FloppyFATBytesPerSector]
+    mul     cx
+    mov     cx, FAT12_DIR_ENTRY_SIZE
+    div     cx
+    mov     word [FloppyFATLoadedDirEntries], ax
+
+floppy_load_dir_end:
+    clc
+    jmp floppy_load_dir_done
+
+floppy_load_dir_fail:
+    stc
+
+floppy_load_dir_done:
+
+    popa
+    ret
 ;
 ;------------------------------------------------------------------------------------------------------------
 
@@ -533,15 +651,20 @@ floppy_get_next_cluster_done:
 ;                        
 print_dir:
     pusha
+    
+    ; ; Print number of entries
+    ; mov     ax, word [FloppyFATLoadedDirEntries]
+    ; call    prtnumdec
+    ; call    prtendl
 
-    mov     ax, FAT12_BUFFER_SEGMENT 
+    mov     ax, word [FloppyBuffrerSegment] 
     mov     es, ax
     mov     bx, word [FloppyBufferDir] ; Get address to dir buffer
 
     ; Entry counter 
     mov     dx, 0
     
-    mov     cx, word [FloppyFATRootEntries]
+    mov     cx, word [FloppyFATLoadedDirEntries]
 print_dir_lp:    
 
     ; Check if this entry is the last in the dir
@@ -550,6 +673,10 @@ print_dir_lp:
     
     ; Check if this entry is free
     cmp     byte es:[bx], 0xE5
+    je      print_dir_common
+    
+    ; Check if this entry is NOT a Long File Name
+    cmp     byte es:[bx+FAT12_DIR_ENTRY_OFST_ATTRIBUTES], 0x0F
     je      print_dir_common
     
     ; Check if entry is file or subdirectory
@@ -646,6 +773,83 @@ print_dir_name_lp1:
 
     popa
     ret
-msg_dir     db "     <DIR>  "
+msg_dir     db "     <DIR>  ", 0x00
+;
+;------------------------------------------------------------------------------------------------------------
+
+;--------------------------------------------------------------------------------------------------
+; Change directory
+; Parameters:
+;  - ax: index of directory to change to        
+; Carry set on fail
+change_dir:
+    pusha
+
+    mov     bx, word [FloppyBuffrerSegment] 
+    mov     es, bx
+    mov     bx, word [FloppyBufferDir] ; Get address to dir buffer
+
+    ; Directory counter 
+    mov     dx, 0
+    
+    mov     cx, word [FloppyFATLoadedDirEntries]
+change_dir_lp:    
+
+    ; Check if this entry is the last in the dir
+    cmp     byte es:[bx], 0x00
+    je      change_dir_notfound
+   
+    ; Check if this entry is free
+    cmp     byte es:[bx], 0xE5
+    je      change_dir_next
+    
+    ; Check if this entry is NOT a Long File Name
+    cmp     byte es:[bx+FAT12_DIR_ENTRY_OFST_ATTRIBUTES], 0x0F
+    je      change_dir_next
+    
+    ; Check if entry is file or subdirectory
+    cmp     byte es:[bx+FAT12_DIR_ENTRY_OFST_ATTRIBUTES], 0x10
+    jne     change_dir_next
+    
+    ; Check if this is the directory we want
+    cmp     dx, ax
+    jne     change_dir_nextdir
+    
+    ; Change to this dir
+    mov     ax, word es:[bx+FAT12_DIR_ENTRY_OFST_LOW_CLUSTER]
+    call    floppy_load_dir
+    jc      change_dir_fail
+    
+    
+    jmp     change_dir_done
+
+change_dir_nextdir:
+
+    inc     dx ; Increment directory counter
+
+change_dir_next:
+
+    add     bx, FAT12_DIR_ENTRY_SIZE    ; Next entry
+    
+    loop change_dir_lp
+    
+    jmp change_dir_notfound
+
+change_dir_fail:
+    stc
+    jmp change_dir_done
+    
+change_dir_notfound:
+
+    lea     si, msg_dir_notfound
+    call    prtstr
+    call    prtendl
+
+change_dir_done:
+
+    popa
+    ret
+
+msg_dir_notfound db "No such directory!", 0x00
 ;
 ;------------------------------------------------------------------------------------------------------------

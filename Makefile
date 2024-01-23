@@ -7,7 +7,7 @@ SRC_DIR=src
 DISK_IMG_PATH=$(OUT_DIR)/disk.img
 DISK_IMG_BS=512
 DISK_IMG_BLOCKS=2880
-RESERVED_SECTORS=3 # 1 is Boot sector only
+RESERVED_SECTORS=4 # 1 is Boot sector only
 
 #  Source files
 BOOT_SRC = $(SRC_DIR)/boot.asm

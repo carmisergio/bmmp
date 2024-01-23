@@ -34,6 +34,8 @@ jmp start
     msg_prompt                  db "> ", 0x00
 ;
 
+%define FAT12_BUFFER_SEGMENT 0x2000
+
 ;--------------------------------------------------------------------------------------------------
 ; Start
 ;          
@@ -41,11 +43,34 @@ start:
 
     ; Clear screen
     call    clearscr
-
+    
     ; Mount FAT12 disk
-    mov     dl, 0   ; Mount disk 0
+    mov     dl, 1   ; Mount disk 0
+    mov     bx, FAT12_BUFFER_SEGMENT
+    mov     es, bx
+    xor     bx, bx
     call    floppy_mount
     jc      fail 
+    
+    ; mov     ax, [FloppyBufferFAT]
+    ; call    prtnumdec
+    ; call    prtendl
+    ; mov     bx, [FloppyBufferFAT]
+    ; mov     ax, es:[bx]
+    ; call    prtnumbin
+    ; call    prtendl
+
+    ; mov     ax, [FloppyBufferDir]
+    ; call    prtnumdec
+    ; call    prtendl
+    ; mov     bx, [FloppyBufferDir]
+    ; mov     ax, es:[bx]
+    ; call    prtnumbin
+    ; call    prtendl
+
+    ; mov     ax, [FloppyBuffrerSegment]
+    ; call    prtnumdec
+    ; call    prtendl
 
     ; ; Print message
     ; lea     si, msg_hello         
@@ -115,9 +140,13 @@ main_lp:
     ; Read number from user
     call    innum_4d
     
-    ; Print number
-    call    prtnumdec
-    call    prtendl
+    ; ; Print number
+    ; call    prtnumdec
+    ; call    prtendl
+    
+    ; Change to directory
+    call    change_dir
+    jc      fail
     
     jmp main_lp
     
@@ -413,6 +442,11 @@ innum_4d_bkspc:
     jmp innum_4d_readch_lp  ; Read next char
 
 innum_4d_end:
+
+    ; Don't exit if user hasn't inserted anything
+    cmp     cx, 0
+    jz      innum_4d_readch_lp
+
     ; Print endline
     call    prtendl
     
